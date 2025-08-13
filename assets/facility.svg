@@ -1,0 +1,42 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .room { fill: #0f172a; stroke: #334155; stroke-width: 3; }
+      .corridor { fill: #111827; stroke: #334155; stroke-width: 3; }
+      .label { fill: #e5e7eb; font-family: Arial, Helvetica, sans-serif; font-size: 18px; }
+      .exit { fill: #065f46; }
+      .door { fill: #6b7280; }
+      .dot-safe { fill: #10b981; }
+      .dot-warn { fill: #f59e0b; }
+      .dot-danger { fill: #ef4444; }
+    </style>
+  </defs>
+  <rect x="30" y="30" width="1140" height="640" fill="#0b1220" stroke="#1f2937" stroke-width="4"/>
+  <rect id="boiler" class="room" x="60" y="60" width="300" height="220" rx="12"/>
+  <text x="210" y="90" class="label" text-anchor="middle">Boiler Room</text>
+  <rect id="lab" class="room" x="60" y="320" width="300" height="320" rx="12"/>
+  <text x="210" y="350" class="label" text-anchor="middle">Process Lab</text>
+  <rect id="warehouse" class="room" x="900" y="60" width="240" height="220" rx="12"/>
+  <text x="1020" y="90" class="label" text-anchor="middle">Cylinder Store</text>
+  <rect id="control" class="room" x="900" y="320" width="240" height="320" rx="12"/>
+  <text x="1020" y="350" class="label" text-anchor="middle">Control Room</text>
+  <rect id="corr_north" class="corridor" x="390" y="60" width="490" height="220" rx="12"/>
+  <text x="635" y="90" class="label" text-anchor="middle">Corridor North</text>
+  <rect id="corr_south" class="corridor" x="390" y="320" width="490" height="320" rx="12"/>
+  <text x="635" y="350" class="label" text-anchor="middle">Corridor South</text>
+  <rect x="60" y="275" width="24" height="10" class="door"/>
+  <rect x="1170" y="360" width="24" height="40" class="exit"/>
+  <text x="1182" y="355" class="label" text-anchor="middle" transform="rotate(90,1182,355)">EXIT</text>
+  <circle id="dot_boiler_xnx" cx="190" cy="170" r="8" class="dot-safe"/>
+  <text x="190" y="155" class="label" text-anchor="middle">XNX</text>
+  <circle id="dot_lab_midas" cx="190" cy="500" r="8" class="dot-warn"/>
+  <text x="190" y="485" class="label" text-anchor="middle">Midas</text>
+  <circle id="dot_cn_sensepoint" cx="640" cy="170" r="8" class="dot-safe"/>
+  <text x="640" y="155" class="label" text-anchor="middle">Sensepoint</text>
+  <circle id="dot_cs_searchpoint" cx="640" cy="500" r="8" class="dot-safe"/>
+  <text x="640" y="485" class="label" text-anchor="middle">Searchpoint</text>
+  <circle id="dot_store_searchline" cx="1040" cy="170" r="8" class="dot-safe"/>
+  <text x="1040" y="155" class="label" text-anchor="middle">Searchline</text>
+  <circle id="dot_control_xnx" cx="1040" cy="500" r="8" class="dot-safe"/>
+  <text x="1040" y="485" class="label" text-anchor="middle">XNX</text>
+</svg>

@@ -1,0 +1,15 @@
+<svg width="800" height="500" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
+  <defs><style>.bg{fill:#0f172a}.wall{stroke:#334155;stroke-width:6}.label{fill:#e5e7eb;font-family:Arial, Helvetica, sans-serif;font-size:18px}.equip{fill:#1f2937;stroke:#475569;stroke-width:2}.door{fill:#6b7280}.exit{fill:#065f46}</style></defs>
+  <rect x="0" y="0" width="800" height="500" class="bg"/>
+  <rect x="50" y="50" width="700" height="400" fill="none" class="wall"/>
+  <rect x="120" y="160" width="170" height="90" rx="8" class="equip"/>
+  <text x="205" y="190" class="label" text-anchor="middle">Boiler A</text>
+  <text x="205" y="212" class="label" text-anchor="middle">XNX (CH₄)</text>
+  <rect x="500" y="180" width="160" height="80" rx="8" class="equip"/>
+  <text x="580" y="208" class="label" text-anchor="middle">Pump Skid</text>
+  <text x="580" y="230" class="label" text-anchor="middle">Sensepoint (H₂)</text>
+  <rect x="390" y="448" width="20" height="30" class="door"/>
+  <text x="400" y="440" class="label" text-anchor="middle">Door</text>
+  <rect x="730" y="230" width="20" height="40" class="exit"/>
+  <text x="725" y="220" class="label" text-anchor="end">EXIT</text>
+</svg>

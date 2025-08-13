@@ -1,0 +1,7 @@
+<svg width="800" height="500" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
+  <defs><style>.bg{fill:#0b1220}.wall{stroke:#334155;stroke-width:6}.label{fill:#e5e7eb;font-family:Arial, Helvetica, sans-serif;font-size:18px}.equip{fill:#0f172a;stroke:#334155;stroke-width:2}.door{fill:#6b7280}</style></defs>
+  <rect x="0" y="0" width="800" height="500" class="bg"/>
+  <rect x="50" y="140" width="700" height="220" fill="none" class="wall"/>
+  <text x="400" y="120" class="label" text-anchor="middle">Corridor North — Sensepoint (O₂)</text>
+  <rect x="720" y="230" width="20" height="40" class="door"/>
+</svg>
