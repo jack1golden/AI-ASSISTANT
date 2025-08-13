@@ -3,13 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-
-# Safe import of plotly_events
-try:
-    from streamlit_plotly_events import plotly_events
-except ModuleNotFoundError:
-    st.error("Missing dependency: `streamlit-plotly-events`. Install it with:\n\n`pip install streamlit-plotly-events`")
-    st.stop()
+from streamlit_plotly_events import plotly_events
 
 st.set_page_config(page_title="OBW AI Safety Assistant", layout="wide", page_icon="🛡️")
 SAFE, WARN, DANGER = "safe", "warn", "danger"
@@ -41,7 +35,6 @@ if "incident_log" not in st.session_state: st.session_state.incident_log = []
 if "free_play" not in st.session_state: st.session_state.free_play = False
 if "audio" not in st.session_state: st.session_state.audio = False
 
-# ---------- Helper Functions ----------
 def gas_state(room_key, ppm):
     d = DETECTORS[room_key]
     if d.get("oxygen_mode"):
@@ -94,15 +87,13 @@ def prediction_curve(room_key, horizon=15):
 
 def state_color(state): return {"safe":"#10b981","warn":"#f59e0b","danger":"#ef4444"}[state]
 
-# ---------- Header ----------
 c1,c2,c3 = st.columns([1,3,1])
-with c1: st.image("assets/obw_logo.png", use_column_width=True)
+with c1: st.image("assets/obw_logo.png", use_container_width=True)
 with c2: st.markdown("<h2 style='text-align:center;margin-top:10px;'>OBW AI Safety Assistant</h2>", unsafe_allow_html=True)
 with c3:
-    if st.button("⚙️", help="Developer Controls", key="gear", use_column_width=True):
+    if st.button("⚙️", help="Developer Controls", key="gear"):
         st.session_state.free_play = not st.session_state.free_play
 
-# ---------- Free Play Mode ----------
 if st.session_state.free_play:
     with st.sidebar:
         st.markdown("### Developer Controls (Free Play)")
@@ -119,31 +110,28 @@ if st.session_state.free_play:
                 df.loc[mask, "ppm"] = df.loc[mask, "ppm"] + 50.0; st.session_state.data = df; st.toast(f"Forced danger for {ROOM_NAMES[rk]}")
         st.markdown("---"); st.markdown("**Mode**: Free Play (click ⚙️ to hide)")
 
-# ---------- Views ----------
 def render_facility():
     st.markdown("#### Facility Overview")
     col_map, col_side = st.columns([3,1])
     with col_map:
-        st.image("assets/facility.svg", use_column_width=True)
+        st.image("assets/facility.svg", use_container_width=True)
         fig = go.Figure()
         fig.update_layout(template="plotly_dark", xaxis=dict(visible=False, range=[0,1200]), yaxis=dict(visible=False, range=[700,0]),
                           margin=dict(l=0,r=0,t=0,b=0), height=520)
         xs, ys, texts, colors, custom = [], [], [], [], []
         now_ts = None
         for rk, d in DETECTORS.items():
-            ppm, ts = last_ppm(rk)
+            ppm, ts = last_ppm(rk); 
             if ts is not None: now_ts = ts
-            stt = gas_state(rk, ppm if ppm is not None else 0)
-            update_timers(rk, stt, ts if ts is not None else datetime.utcnow())
+            stt = gas_state(rk, ppm if ppm is not None else 0); update_timers(rk, stt, ts if ts is not None else datetime.utcnow())
             xs.append(d["pos"][0]); ys.append(d["pos"][1])
             label = f"{ROOM_NAMES[rk]} — {d['model']}"
             tstr = time_in_state_str(rk, DANGER, ts if ts is not None else datetime.utcnow())
             if stt == DANGER: label += f"  ⏱ {tstr}"
             texts.append(label); colors.append(state_color(stt)); custom.append(rk)
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers+text",
-                                 marker=dict(size=16, color=colors, line=dict(color="#111", width=1)),
-                                 text=[t.split(' — ')[1] for t in texts], textposition="top center",
-                                 customdata=custom, hovertemplate="%{text}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers+text", marker=dict(size=16, color=colors, line=dict(color="#111", width=1)),
+                                 text=[t.split(' — ')[1] for t in texts], textposition="top center", customdata=custom,
+                                 hovertemplate="%{text}<extra></extra>"))
         clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="facility_click")
         if clicked:
             room_clicked = clicked[0]["customdata"]; st.session_state.selected_room = room_clicked; st.session_state.view = "room"; st.rerun()
@@ -153,8 +141,8 @@ def render_facility():
         for rk, t in st.session_state.timers.items():
             rows.append({"Detector": DETECTORS[rk]["model"], "Room": ROOM_NAMES[rk], "State": t["state"].upper(), "Longest Danger (s)": int(t["danger_longest"]) })
         df_lead = pd.DataFrame(rows).sort_values("Longest Danger (s)", ascending=False)
-        st.dataframe(df_lead, use_column_width=True, hide_index=True)
-        if st.button("Replay Incident", use_column_width=True):
+        st.dataframe(df_lead, use_container_width=True, hide_index=True)
+        if st.button("Replay Incident"):
             st.session_state.demo_index = 0; st.session_state.incident_log = []
             for k in st.session_state.timers: st.session_state.timers[k] = {"state": SAFE, "danger_start": None, "warn_start": None, "danger_longest": 0}
             st.session_state.view = "facility"; st.rerun()
@@ -166,7 +154,7 @@ def render_room():
     col_map, col_ai = st.columns([2,1])
     with col_map:
         room_svg_path = f"assets/room_{rk}.svg" if rk in ["boiler","lab","corr_north"] else "assets/room_boiler.svg"
-        st.image(room_svg_path, use_column_width=True)
+        st.image(room_svg_path, use_container_width=True)
         c1,c2,c3 = st.columns([1,1,2])
         if c1.button("⬅️ Door to Corridor"): st.session_state.view = "facility"; st.rerun()
         if c2.button("Evacuation"): st.session_state.view = "evac"; st.rerun()
@@ -194,7 +182,7 @@ def render_room():
         fig.add_hrect(y0=danger, y1=1e6, fillcolor="#ef4444", opacity=0.1, line_width=0)
         fig.add_hrect(y0=warn, y1=danger, fillcolor="#f59e0b", opacity=0.08, line_width=0)
     fig.update_layout(template="plotly_dark", height=360, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
-    st.plotly_chart(fig, use_column_width=True)
+    st.plotly_chart(fig, use_container_width=True)
     if stt == DANGER:
         st.session_state.view = "evac"; st.rerun()
 
@@ -202,7 +190,7 @@ def render_evac():
     st.markdown("### Evacuation Mode")
     st.info("AI is guiding evacuation. Follow green exit markers.")
     cols = st.columns([3,1])
-    with cols[0]: st.image("assets/facility.svg", use_column_width=True)
+    with cols[0]: st.image("assets/facility.svg", use_container_width=True)
     with cols[1]:
         if st.button("Return to Room"): st.session_state.view = "room"; st.rerun()
         if st.button("Back to Facility"): st.session_state.view = "facility"; st.rerun()
@@ -213,7 +201,6 @@ def render_evac():
 def demo_tick():
     if st.session_state.demo_index < len(st.session_state.data)-1: st.session_state.demo_index += 1
 
-# ---------- Main Loop ----------
 demo_tick()
 view = st.session_state.view
 if view == "facility": render_facility()
