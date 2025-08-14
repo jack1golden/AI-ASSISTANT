@@ -414,6 +414,7 @@ def compute_route(start_room_key: str):
 # ──────────────────────────────────────────────────────────────────────────────
 # Top bar & dev controls (incl. Simulation Center)
 # ──────────────────────────────────────────────────────────────────────────────
+# ── Top bar & dev controls (no callbacks; relies on Streamlit's auto-rerun)
 col_logo, col_title, col_gear = st.columns([1, 3, 1])
 
 with col_logo:
@@ -425,35 +426,22 @@ with col_logo:
 with col_title:
     st.markdown("<h2 style='text-align:center;margin-top:10px;'>OBW AI Safety Assistant</h2>", unsafe_allow_html=True)
 
-def toggle_free_play():
-    st.session_state.free_play = not st.session_state.get("free_play", False)
-    st.rerun()
-
 with col_gear:
-    # Primary: gear button (forces rerun)
-    st.button("⚙️", help="Developer Controls", key="gear_btn", use_container_width=True, on_click=toggle_free_play)
-    # Backup: tiny header checkbox (stays in sync)
-    dev_hdr = st.checkbox("Dev", key="dev_hdr", value=st.session_state.get("free_play", False), help="Toggle developer mode")
-    if dev_hdr != st.session_state.get("free_play", False):
-        st.session_state.free_play = dev_hdr
-        st.rerun()
+    # Primary: gear button flips state; the press itself triggers a rerun
+    if st.button("⚙️", help="Developer Controls", key="gear_btn", use_container_width=True):
+        st.session_state.free_play = not st.session_state.get("free_play", False)
 
+    # Backup: tiny header checkbox bound to the same state
+    new_val = st.checkbox(
+        "Dev",
+        key="dev_hdr",
+        value=st.session_state.get("free_play", False),
+        help="Toggle developer mode"
+    )
+    # Keep session state in sync with the checkbox
+    if new_val != st.session_state.get("free_play", False):
+        st.session_state.free_play = new_val
 
-if st.session_state.free_play:
-    with st.sidebar:
-        st.markdown("### Developer Controls")
-        st.toggle("Enable Audio Alerts", key="audio")
-        st.toggle("Show Evacuation Route (facility)", key="show_route")
-        st.markdown("---")
-        # Simulation Center
-        st.markdown("#### Simulation Center")
-        room_choice = st.selectbox("Room ID", list(ROOMS.keys()), index=0)
-        scenario = st.selectbox("Scenario", [
-            "Spike: +50 for 5 ticks",
-            "Ramp: +5 per tick for 15",
-            "O₂ drop: -0.5 per tick (20)",
-            "CO spike: +20 for 10",
-        ])
         if st.button("Run Scenario"):
             apply_simulation(room_choice, scenario)
             st.toast(f"Simulated '{scenario}' in {ROOMS[room_choice]['name']}")
