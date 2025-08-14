@@ -415,16 +415,29 @@ def compute_route(start_room_key: str):
 # Top bar & dev controls (incl. Simulation Center)
 # ──────────────────────────────────────────────────────────────────────────────
 col_logo, col_title, col_gear = st.columns([1, 3, 1])
+
 with col_logo:
     try:
         st.image("assets/obw_logo.png", use_container_width=True)
     except Exception:
         st.write("🛡️")
+
 with col_title:
     st.markdown("<h2 style='text-align:center;margin-top:10px;'>OBW AI Safety Assistant</h2>", unsafe_allow_html=True)
+
+def toggle_free_play():
+    st.session_state.free_play = not st.session_state.get("free_play", False)
+    st.rerun()
+
 with col_gear:
-    if st.button("⚙️", help="Developer Controls", key="gear", use_container_width=True):
-        st.session_state.free_play = not st.session_state.free_play
+    # Primary: gear button (forces rerun)
+    st.button("⚙️", help="Developer Controls", key="gear_btn", use_container_width=True, on_click=toggle_free_play)
+    # Backup: tiny header checkbox (stays in sync)
+    dev_hdr = st.checkbox("Dev", key="dev_hdr", value=st.session_state.get("free_play", False), help="Toggle developer mode")
+    if dev_hdr != st.session_state.get("free_play", False):
+        st.session_state.free_play = dev_hdr
+        st.rerun()
+
 
 if st.session_state.free_play:
     with st.sidebar:
