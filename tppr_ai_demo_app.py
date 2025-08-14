@@ -169,7 +169,7 @@ def gas_state(detector_cfg, ppm: float) -> str:
 
 def update_timers(detector_key: str, state: str, ts: datetime):
     t = st.session_state.timers[detector_key]
-    if state != t["state"]]:
+    if state != t["state"]:
         room_key, d = DETECTOR_INDEX[detector_key]
         st.session_state.incident_log.append({
             "timestamp": ts,
@@ -640,3 +640,4 @@ elif view == "evac":
     render_evac()
 else:
     render_facility()
+
