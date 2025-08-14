@@ -5,28 +5,23 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from streamlit_plotly_events import plotly_events
 
-########################
-# App config & constants
-########################
-st.set_page_config(
-    page_title="OBW AI Safety Assistant",
-    layout="wide",
-    page_icon="🛡️",
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# App config
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="OBW AI Safety Assistant", layout="wide", page_icon="🛡️")
 
 SAFE, WARN, DANGER = "safe", "warn", "danger"
 STATE_COLORS = {SAFE: "#10b981", WARN: "#f59e0b", DANGER: "#ef4444"}
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 # Domain model (rooms & detectors)
-########################
-# Facility layout is a 1200x700 canvas (same coordinate system as v1)
+# facility canvas = 1200 x 700; room canvas = 1000 x 600
+# ──────────────────────────────────────────────────────────────────────────────
 ROOMS = {
     "boiler": {
         "name": "Boiler Room",
-        "facility_pos": (190, 170),  # where the room sits on the facility canvas
+        "facility_pos": (190, 170),
         "room_img": "assets/room_boiler.svg",
-        # detectors laid out within the room canvas (0..1000 x 0..600)
         "detectors": [
             {
                 "key": "boiler_xnx",
@@ -35,8 +30,8 @@ ROOMS = {
                 "warn": 45.0,
                 "danger": 55.0,
                 "oxygen_mode": False,
-                "facility_pos": (190, 170),  # pin for facility view
-                "room_pos": (350, 280),      # pin for room view
+                "facility_pos": (190, 170),
+                "room_pos": (350, 280),
             },
         ],
     },
@@ -68,7 +63,7 @@ ROOMS = {
                 "gas": "O₂",
                 "warn": 18.0,
                 "danger": 17.0,
-                "oxygen_mode": True,   # reverse thresholds (lower is worse)
+                "oxygen_mode": True,  # lower is worse
                 "facility_pos": (640, 170),
                 "room_pos": (480, 160),
             },
@@ -77,7 +72,7 @@ ROOMS = {
     "corr_south": {
         "name": "Corridor South",
         "facility_pos": (640, 500),
-        "room_img": "assets/room_boiler.svg",  # placeholder
+        "room_img": "assets/room_boiler.svg",  # placeholder image
         "detectors": [
             {
                 "key": "cs_searchpoint",
@@ -94,7 +89,7 @@ ROOMS = {
     "warehouse": {
         "name": "Cylinder Store",
         "facility_pos": (1040, 170),
-        "room_img": "assets/room_boiler.svg",  # placeholder
+        "room_img": "assets/room_boiler.svg",  # placeholder image
         "detectors": [
             {
                 "key": "store_searchline",
@@ -111,7 +106,7 @@ ROOMS = {
     "control": {
         "name": "Control Room",
         "facility_pos": (1040, 500),
-        "room_img": "assets/room_boiler.svg",  # placeholder
+        "room_img": "assets/room_boiler.svg",  # placeholder image
         "detectors": [
             {
                 "key": "control_xnx",
@@ -126,15 +121,13 @@ ROOMS = {
         ],
     },
 }
-
-# Fast index for detectors by key
 DETECTOR_INDEX = {d["key"]: (room_key, d) for room_key, room in ROOMS.items() for d in room["detectors"]}
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 # Session state
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 if "data" not in st.session_state:
-    st.session_state.data = pd.read_csv("demo_data.csv", parse_dates=["timestamp"])  # expects columns: timestamp, room, ppm
+    st.session_state.data = pd.read_csv("demo_data.csv", parse_dates=["timestamp"])
 if "view" not in st.session_state:
     st.session_state.view = "facility"  # facility | room | detector | evac
 if "room_key" not in st.session_state:
@@ -151,11 +144,14 @@ if "free_play" not in st.session_state:
     st.session_state.free_play = False
 if "audio" not in st.session_state:
     st.session_state.audio = False
+if "diagram_mode" not in st.session_state:
+    st.session_state.diagram_mode = True  # use blueprint-style diagram
+if "last_event" not in st.session_state:
+    st.session_state.last_event = None
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-########################
-
+# ──────────────────────────────────────────────────────────────────────────────
 def gas_state(detector_cfg, ppm: float) -> str:
     if detector_cfg.get("oxygen_mode"):
         if ppm <= detector_cfg["danger"]:
@@ -169,7 +165,6 @@ def gas_state(detector_cfg, ppm: float) -> str:
         elif ppm >= detector_cfg["warn"]:
             return WARN
         return SAFE
-
 
 def update_timers(detector_key: str, state: str, ts: datetime):
     t = st.session_state.timers[detector_key]
@@ -198,7 +193,6 @@ def update_timers(detector_key: str, state: str, ts: datetime):
         t["warn_start"] = None
     t["state"] = state
 
-
 def time_in_state_str(detector_key: str, state: str, now_ts: datetime) -> str:
     t = st.session_state.timers[detector_key]
     if state == DANGER and t["danger_start"] is not None:
@@ -211,7 +205,6 @@ def time_in_state_str(detector_key: str, state: str, now_ts: datetime) -> str:
         return f"{m}m {s}s"
     return "—"
 
-
 def last_ppm(room_key: str):
     df = st.session_state.data
     sub = df[df["room"] == room_key]
@@ -219,7 +212,6 @@ def last_ppm(room_key: str):
         return None, None
     last = sub.iloc[min(len(sub) - 1, st.session_state.demo_index)]
     return float(last["ppm"]), pd.to_datetime(last["timestamp"])  # type: ignore
-
 
 def prediction_curve(room_key: str, horizon: int = 15) -> pd.DataFrame:
     df = st.session_state.data[st.session_state.data["room"] == room_key].iloc[: st.session_state.demo_index + 1]
@@ -230,20 +222,83 @@ def prediction_curve(room_key: str, horizon: int = 15) -> pd.DataFrame:
     slope = deltas.mean() if len(deltas) else 0.0
     start_ppm = df["ppm"].iloc[-1]
     start_ts = df["timestamp"].iloc[-1]
-    return pd.DataFrame(
-        {
-            "timestamp": [start_ts + timedelta(minutes=i) for i in range(1, horizon + 1)],
-            "ppm": [max(0.0, start_ppm + slope * i) for i in range(1, horizon + 1)],
-        }
-    )
-
+    return pd.DataFrame({
+        "timestamp": [start_ts + timedelta(minutes=i) for i in range(1, horizon + 1)],
+        "ppm": [max(0.0, start_ppm + slope * i) for i in range(1, horizon + 1)],
+    })
 
 def df_table(df: pd.DataFrame):
     return st.dataframe(df, use_container_width=True, hide_index=True)
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
+# Industrial facility diagram
+# ──────────────────────────────────────────────────────────────────────────────
+def build_facility_diagram():
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_white",
+        xaxis=dict(visible=False, range=[0, 1200]),
+        yaxis=dict(visible=False, range=[700, 0]),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=520,
+        paper_bgcolor="#0f172a",  # slate-900
+        plot_bgcolor="#111827",   # gray-900
+    )
+    # Outer walls
+    fig.add_shape(type="rect", x0=30, y0=30, x1=1170, y1=670, line=dict(color="#9ca3af", width=4))
+    # Rooms (blocks), aligned roughly to facility_pos coordinates
+    rooms_rects = {
+        "boiler": (80, 80, 320, 260),
+        "lab": (80, 420, 320, 640),
+        "corr_north": (520, 80, 680, 260),
+        "corr_south": (520, 420, 680, 640),
+        "warehouse": (900, 80, 1140, 260),
+        "control": (900, 420, 1140, 640),
+    }
+    for key, (x0, y0, x1, y1) in rooms_rects.items():
+        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                      fillcolor="#1f2937", opacity=0.9, line=dict(color="#4b5563", width=2))
+        cx = (x0 + x1) / 2
+        cy = y0 - 10
+        fig.add_annotation(x=cx, y=cy, text=ROOMS[key]["name"], showarrow=False, font=dict(color="#e5e7eb"))
+
+    # Corridors (visual hints)
+    fig.add_shape(type="rect", x0=480, y0=80, x1=720, y1=640, fillcolor="#111827", line=dict(color="#374151", width=1))
+    fig.add_shape(type="rect", x0=320, y0=300, x1=900, y1=420, fillcolor="#111827", line=dict(color="#374151", width=1))
+
+    # Exit example
+    fig.add_shape(type="rect", x0=1160, y0=330, x1=1170, y1=370, fillcolor="#10b981", line=dict(color="#10b981"))
+    fig.add_annotation(x=1165, y=320, text="East Exit", showarrow=False, font=dict(color="#10b981"))
+
+    # Room pins (click targets), colored by worst detector state
+    xs, ys, labels, colors, custom = [], [], [], [], []
+    for room_key, room in ROOMS.items():
+        x, y = room["facility_pos"]
+        xs.append(x); ys.append(y)
+        labels.append(room["name"])
+        ppm, _ = last_ppm(room_key)
+        worst = SAFE
+        for det in room["detectors"]:
+            s = gas_state(det, ppm or 0)
+            if s == DANGER:
+                worst = DANGER; break
+            elif s == WARN:
+                worst = WARN
+        colors.append(STATE_COLORS[worst])
+        custom.append(room_key)
+
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers+text",
+        marker=dict(size=26, color=colors, line=dict(color="#111", width=1)),
+        text=labels, textposition="top center",
+        customdata=custom, hoverlabel=dict(namelength=-1),
+        hovertemplate="%{text}<extra></extra>",
+    ))
+    return fig
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Top bar & dev controls
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 col_logo, col_title, col_gear = st.columns([1, 3, 1])
 with col_logo:
     try:
@@ -269,7 +324,7 @@ if st.session_state.free_play:
             st.rerun()
         st.markdown("---")
         st.markdown("**Manual Triggers**")
-        # Nudge next 5 records for a given room upward
+        # Increase next 5 records for a given room to simulate a spike
         for room_key in ROOMS.keys():
             if st.button(f"Trigger Danger spike in: {ROOMS[room_key]['name']}"):
                 idx = st.session_state.demo_index
@@ -281,10 +336,21 @@ if st.session_state.free_play:
         st.markdown("---")
         st.markdown("**Mode**: Free Play (click ⚙️ to hide)")
 
-########################
-# Views
-########################
+# ──────────────────────────────────────────────────────────────────────────────
+# Debug panel
+# ──────────────────────────────────────────────────────────────────────────────
+with st.expander("Debug", expanded=False):
+    st.write({
+        "view": st.session_state.get("view"),
+        "room_key": st.session_state.get("room_key"),
+        "detector_key": st.session_state.get("detector_key"),
+        "demo_index": st.session_state.get("demo_index"),
+    })
+    st.json(st.session_state.get("last_event") or {})
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Views
+# ──────────────────────────────────────────────────────────────────────────────
 def render_breadcrumbs():
     crumbs = ["Facility"]
     if st.session_state.room_key:
@@ -294,66 +360,23 @@ def render_breadcrumbs():
         crumbs.append(d["model"])
     st.caption(" › ".join(crumbs))
 
-
 def render_facility():
     render_breadcrumbs()
     st.markdown("#### Facility Overview")
     col_map, col_side = st.columns([3, 1])
 
     with col_map:
-        try:
-            st.image("assets/facility.svg", use_container_width=True)
-        except Exception:
-            st.info("Facility map image not found — using coordinate canvas below.")
-        # Build a Plotly scatter of room pins (click to enter room)
-        fig = go.Figure()
-        fig.update_layout(
-            template="plotly_dark",
-            xaxis=dict(visible=False, range=[0, 1200]),
-            yaxis=dict(visible=False, range=[700, 0]),
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=520,
+        fig = build_facility_diagram()
+        clicked = plotly_events(
+            fig,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            key="facility_click_v3",
+            override_height=520,
         )
-        xs, ys, labels, colors, custom = [], [], [], [], []
-        now_ts = None
-        # Determine state per room by aggregating most severe detector state
-        for room_key, room in ROOMS.items():
-            ppm, ts = last_ppm(room_key)
-            now_ts = ts or datetime.utcnow()
-            # default to SAFE if no data yet
-            worst_state = SAFE
-            for det in room["detectors"]:
-                stt = gas_state(det, ppm if ppm is not None else 0)
-                if stt == DANGER:
-                    worst_state = DANGER
-                    break
-                elif stt == WARN:
-                    worst_state = WARN
-            # update timers for each detector too
-            for det in room["detectors"]:
-                stt = gas_state(det, ppm if ppm is not None else 0)
-                update_timers(det["key"], stt, now_ts)
-            x, y = room["facility_pos"]
-            xs.append(x)
-            ys.append(y)
-            labels.append(room["name"])
-            colors.append(STATE_COLORS[worst_state])
-            custom.append(room_key)
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="markers+text",
-                marker=dict(size=18, color=colors, line=dict(color="#111", width=1)),
-                text=labels,
-                textposition="top center",
-                customdata=custom,
-                hovertemplate="%{text}<extra></extra>",
-            )
-        )
-        clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="facility_click_v2")
-        st.plotly_chart(fig, use_container_width=True)
         if clicked:
+            st.session_state.last_event = clicked[0]
             room_clicked = clicked[0]["customdata"]
             st.session_state.room_key = room_clicked
             st.session_state.detector_key = None
@@ -365,14 +388,12 @@ def render_facility():
         rows = []
         for det_key, t in st.session_state.timers.items():
             room_key, d = DETECTOR_INDEX[det_key]
-            rows.append(
-                {
-                    "Detector": d["model"],
-                    "Room": ROOMS[room_key]["name"],
-                    "State": t["state"].upper(),
-                    "Longest Danger (s)": int(t["danger_longest"]),
-                }
-            )
+            rows.append({
+                "Detector": d["model"],
+                "Room": ROOMS[room_key]["name"],
+                "State": t["state"].upper(),
+                "Longest Danger (s)": int(t["danger_longest"]),
+            })
         df_lead = pd.DataFrame(rows).sort_values("Longest Danger (s)", ascending=False)
         df_table(df_lead)
         if st.button("Replay Incident", use_container_width=True):
@@ -382,7 +403,6 @@ def render_facility():
                 st.session_state.timers[k] = {"state": SAFE, "danger_start": None, "warn_start": None, "danger_longest": 0}
             st.session_state.view = "facility"
             st.rerun()
-
 
 def render_room():
     render_breadcrumbs()
@@ -395,11 +415,13 @@ def render_room():
 
     col_map, col_ai = st.columns([2, 1])
     with col_map:
+        # background plan (optional SVG)
         try:
             st.image(room["room_img"], use_container_width=True)
         except Exception:
             st.info("Room image not found — showing detector map below.")
-        # Clickable detectors within the room
+
+        # Interactive detector pins
         fig = go.Figure()
         fig.update_layout(
             template="plotly_dark",
@@ -413,46 +435,48 @@ def render_room():
         for det in room["detectors"]:
             stt = gas_state(det, ppm if ppm is not None else 0)
             x, y = det["room_pos"]
-            xs.append(x)
-            ys.append(y)
+            xs.append(x); ys.append(y)
             labels.append(f"{det['model']} ({det['gas']})")
             colors.append(STATE_COLORS[stt])
             custom.append(det["key"])
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="markers+text",
-                marker=dict(size=16, color=colors, line=dict(color="#111", width=1)),
-                text=[l.split(" (")[0] for l in labels],
-                textposition="top center",
-                customdata=custom,
-                hovertemplate="%{text}<extra></extra>",
-            )
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers+text",
+            marker=dict(size=20, color=colors, line=dict(color="#111", width=1)),
+            hoverlabel=dict(namelength=-1),
+            text=[l.split(" (")[0] for l in labels],
+            textposition="top center",
+            customdata=custom,
+            hovertemplate="%{text}<extra></extra>",
+        ))
+        clicked = plotly_events(
+            fig,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            key=f"room_click_{rk}",
+            override_height=360,
         )
-        clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key=f"room_click_{rk}")
-        st.plotly_chart(fig, use_container_width=True)
-        c1, c2, c3 = st.columns([1, 1, 2])
+
+        c1, c2, _ = st.columns([1, 1, 2])
         if c1.button("⬅️ Back to Facility"):
-            st.session_state.view = "facility"
-            st.rerun()
+            st.session_state.view = "facility"; st.rerun()
         if c2.button("Evacuation"):
-            st.session_state.view = "evac"
-            st.rerun()
+            st.session_state.view = "evac"; st.rerun()
+
         if clicked:
+            st.session_state.last_event = clicked[0]
             det_key = clicked[0]["customdata"]
             st.session_state.detector_key = det_key
             st.session_state.view = "detector"
             st.rerun()
 
     with col_ai:
-        # Room level quick status (worst-of detectors)
+        # Room-level quick status (worst of detectors)
         worst = SAFE
         for det in room["detectors"]:
-            d_state = gas_state(det, last_ppm(rk)[0] or 0)
+            d_state = gas_state(det, (ppm or 0))
             if d_state == DANGER:
-                worst = DANGER
-                break
+                worst = DANGER; break
             elif d_state == WARN:
                 worst = WARN
         if worst == DANGER:
@@ -461,15 +485,13 @@ def render_room():
             st.warning("Warning. Levels trending upward. Increase ventilation and prepare for evacuation.")
         else:
             st.success("All clear. Monitoring normal.")
-        # Detectors list
+        # Shortcut buttons
         st.markdown("#### Detectors")
         for det in room["detectors"]:
-            btn = st.button(f"Open: {det['model']} — {det['gas']}", key=f"open_{det['key']}", use_container_width=True)
-            if btn:
+            if st.button(f"Open: {det['model']} — {det['gas']}", key=f"open_{det['key']}", use_container_width=True):
                 st.session_state.detector_key = det["key"]
                 st.session_state.view = "detector"
                 st.rerun()
-
 
 def render_detector():
     render_breadcrumbs()
@@ -497,38 +519,27 @@ def render_detector():
 
     fig = go.Figure()
     if not df_room.empty:
-        fig.add_trace(
-            go.Scatter(x=df_room["timestamp"], y=df_room["ppm"], mode="lines+markers", name="Live", line=dict(width=3))
-        )
+        fig.add_trace(go.Scatter(x=df_room["timestamp"], y=df_room["ppm"], mode="lines+markers", name="Live", line=dict(width=3)))
     if not pred.empty:
-        fig.add_trace(
-            go.Scatter(x=pred["timestamp"], y=pred["ppm"], mode="lines", name="Prediction", line=dict(dash="dash"))
-        )
-
-    warn = det["warn"]
-    danger = det["danger"]
+        fig.add_trace(go.Scatter(x=pred["timestamp"], y=pred["ppm"], mode="lines", name="Prediction", line=dict(dash="dash")))
+    warn = det["warn"]; danger = det["danger"]
     if det.get("oxygen_mode"):
         fig.add_hrect(y0=-1e6, y1=danger, fillcolor=STATE_COLORS[DANGER], opacity=0.10, line_width=0)
         fig.add_hrect(y0=danger, y1=warn, fillcolor=STATE_COLORS[WARN], opacity=0.08, line_width=0)
     else:
         fig.add_hrect(y0=danger, y1=1e6, fillcolor=STATE_COLORS[DANGER], opacity=0.10, line_width=0)
         fig.add_hrect(y0=warn, y1=danger, fillcolor=STATE_COLORS[WARN], opacity=0.08, line_width=0)
-
     fig.update_layout(template="plotly_dark", height=380, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
     st.plotly_chart(fig, use_container_width=True)
 
-    c1, c2, c3 = st.columns([1, 1, 2])
+    c1, c2, _ = st.columns([1, 1, 2])
     if c1.button("⬅️ Room"):
-        st.session_state.view = "room"
-        st.rerun()
+        st.session_state.view = "room"; st.rerun()
     if c2.button("Evacuation"):
-        st.session_state.view = "evac"
-        st.rerun()
+        st.session_state.view = "evac"; st.rerun()
 
     if stt == DANGER:
-        st.session_state.view = "evac"
-        st.rerun()
-
+        st.session_state.view = "evac"; st.rerun()
 
 def render_evac():
     render_breadcrumbs()
@@ -542,30 +553,35 @@ def render_evac():
             st.write("Facility map unavailable")
     with cols[1]:
         if st.button("Return to Room"):
-            st.session_state.view = "room"
-            st.rerun()
+            st.session_state.view = "room"; st.rerun()
         if st.button("Back to Facility"):
-            st.session_state.view = "facility"
-            st.rerun()
+            st.session_state.view = "facility"; st.rerun()
     st.markdown("#### AI Evacuation Guidance")
     rk = st.session_state.room_key or "boiler"
     st.write(f"Starting from **{ROOMS[rk]['name']}**. Nearest exit is **East Exit**. Avoid Corridor South if alarms are active.")
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 # Demo tick (simulates time)
-########################
-
+# ──────────────────────────────────────────────────────────────────────────────
 def demo_tick():
     if st.session_state.demo_index < len(st.session_state.data) - 1:
         st.session_state.demo_index += 1
 
 demo_tick()
 
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 # Router
-########################
+# ──────────────────────────────────────────────────────────────────────────────
 view = st.session_state.view
 if view == "facility":
+    # Update timers each loop using latest per-room ppm
+    now_ts = datetime.utcnow()
+    for room_key, room in ROOMS.items():
+        ppm, ts = last_ppm(room_key)
+        ts_use = ts if ts is not None else now_ts
+        for det in room["detectors"]:
+            stt = gas_state(det, ppm if ppm is not None else 0)
+            update_timers(det["key"], stt, ts_use)
     render_facility()
 elif view == "room":
     render_room()
@@ -575,5 +591,6 @@ elif view == "evac":
     render_evac()
 else:
     render_facility()
+
 
 
