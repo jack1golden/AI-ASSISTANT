@@ -6,221 +6,273 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from streamlit_plotly_events import plotly_events
 
-st.set_page_config(page_title="OBW Safety — Floorplan", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="OBW AI Safety Assistant — Floorplan", layout="wide", page_icon="🏭")
 
-HEALTHY="healthy"; INHIBIT="inhibit"; ALARM="alarm"; FAULT="fault"; OVER="over"
-STATE_COLORS={HEALTHY:"#10b981", INHIBIT:"#f59e0b", ALARM:"#ef4444", FAULT:"#fb923c", OVER:"#e5e7eb"}
+SAFE, WARN, DANGER = "healthy", "inhibit", "alarm"
+COLORS = {"healthy":"#10b981","inhibit":"#f59e0b","alarm":"#ef4444","fault":"#fb923c","over":"#e5e7eb"}
 
-ROOMS={
-    "entry":{"title":"Entry","poly":[(70,580),(300,580),(300,650),(70,650)],"detectors":[]},
-    "room1":{"title":"Room 1","poly":[(820,60),(1120,60),(1120,260),(820,260)],
-             "detectors":[{"key":"r1_xnx","gas":"CH₄","warn":45.0,"danger":55.0,"oxygen_mode":False}]},
-    "room2":{"title":"Room 2","poly":[(820,270),(1120,270),(1120,470),(820,470)],
-             "detectors":[{"key":"r2_o2","gas":"O₂","warn":18.0,"danger":17.0,"oxygen_mode":True}]},
-    "room3":{"title":"Room 3","poly":[(520,270),(810,270),(810,470),(520,470)],
-             "detectors":[{"key":"r3_co","gas":"CO","warn":30.0,"danger":40.0,"oxygen_mode":False}]},
-    "room12":{"title":"Room 12","poly":[(520,60),(810,60),(810,260),(520,260)],
-              "detectors":[{"key":"r12_nh3","gas":"NH₃","warn":35.0,"danger":45.0,"oxygen_mode":False}]},
-    "prod1":{"title":"Production 1","poly":[(310,60),(510,60),(510,260),(310,260)],
-             "detectors":[{"key":"p1_h2s","gas":"H₂S","warn":5.0,"danger":10.0,"oxygen_mode":False}]},
-    "prod2":{"title":"Production 2","poly":[(310,270),(510,270),(510,470),(310,470)],
-             "detectors":[{"key":"p2_h2","gas":"H₂","warn":35.0,"danger":50.0,"oxygen_mode":False}]},
+W, H = 1400, 840  # must match the background image
+ROOMS_POLY = {
+    "entry":        [(140,620),(360,620),(360,780),(140,780)],
+    "gowning":      [(380,620),(620,620),(620,780),(380,780)],
+    "reactor":      [(140,140),(420,140),(420,360),(140,360)],
+    "cleanroom":    [(440,140),(760,140),(760,360),(440,360)],
+    "granulation":  [(780,140),(1100,140),(1100,360),(780,360)],
+    "packaging":    [(440,380),(760,380),(760,600),(440,600)],
+    "warehouse":    [(780,380),(1100,380),(1100,600),(780,600)],
+    "utilities":    [(1120,380),(1260,380),(1260,600),(1120,600)],
+    "qc":           [(1120,140),(1260,140),(1260,360),(1120,360)],
 }
-DETECTOR_INDEX={d["key"]:(rk,d) for rk,r in ROOMS.items() for d in r["detectors"]}
+ROOM_DISPLAY = {
+    "entry":"Entry / Security",
+    "gowning":"Gowning",
+    "reactor":"Reactor Suite",
+    "cleanroom":"Cleanroom (Grade C)",
+    "granulation":"Granulation",
+    "packaging":"Packaging Hall",
+    "warehouse":"Warehouse (API)",
+    "utilities":"Utilities / Boilers",
+    "qc":"QC Lab",
+}
 
-def _init_state():
-    if "data" not in st.session_state:
-        try:
-            st.session_state.data=pd.read_csv("demo_data.csv", parse_dates=["timestamp"])
-        except Exception:
-            rng=pd.date_range(end=pd.Timestamp.utcnow(), periods=600, freq="min")
-            rows=[]; keys=[k for k in ROOMS.keys() if k!="entry"]
-            for i,ts in enumerate(rng):
-                rk=keys[i%len(keys)]; base_val=10+(i%30)*0.12
-                rows.append({"timestamp":ts,"room":rk,"ppm":round(float(base_val+np.random.normal(0,0.5)),2)})
-            st.session_state.data=pd.DataFrame(rows)
-    st.session_state.setdefault("view","facility")
-    st.session_state.setdefault("room_key",None)
-    st.session_state.setdefault("demo_index", min(100, len(st.session_state.data)-1))
-    st.session_state.setdefault("free_play", False)
-    st.session_state.setdefault("show_route", False)
-    st.session_state.setdefault("last_event", None)
-    st.session_state.setdefault("wireframe", False)
-_init_state()
+# ── State
+if "data" not in st.session_state:
+    st.session_state.data = pd.read_csv("demo_data.csv", parse_dates=["timestamp"])
+if "view" not in st.session_state:
+    st.session_state.view = "facility"
+if "room_key" not in st.session_state:
+    st.session_state.room_key = None
+if "demo_index" not in st.session_state:
+    st.session_state.demo_index = 0
+if "free_play" not in st.session_state:
+    st.session_state.free_play = False
+if "last_event" not in st.session_state:
+    st.session_state.last_event = None
 
-def last_ppm(room_key:str):
-    df=st.session_state.data; sub=df[df["room"]==room_key]
-    if sub.empty: return None, None
-    idx=min(len(sub)-1, st.session_state.demo_index)
-    row=sub.iloc[idx]; return float(row["ppm"]), pd.to_datetime(row["timestamp"])
+# ── Helpers
+def _center(poly):
+    xs=[p[0] for p in poly]; ys=[p[1] for p in poly]
+    return sum(xs)/len(xs), sum(ys)/len(ys)
 
-def state_from_threshold(det_cfg, value:float)->str:
-    if value is None: return FAULT
-    if det_cfg.get("oxygen_mode"):
-        if value <= det_cfg["danger"]: return ALARM
-        if value <= det_cfg["warn"]: return INHIBIT
-        return HEALTHY
+def worst_status_for_room(rk: str) -> str:
+    df = st.session_state.data
+    sub = df[df["room"] == rk]
+    if sub.empty:
+        return "fault"
+    idx = min(len(sub)-1, st.session_state.demo_index)
+    val = float(sub.iloc[idx]["ppm"])
+    # thresholds (demo)
+    thr = {
+        "reactor": (35, 45, False),
+        "granulation": (30, 40, False),
+        "cleanroom": (18, 17, True),  # oxygen mode (downwards)
+        "packaging": (35, 45, False),
+        "warehouse": (35, 50, False),
+        "utilities": (45, 55, False),
+        "entry": (40, 50, False),
+        "gowning": (40, 50, False),
+        "qc": (30, 40, False),
+    }[rk]
+    warn, danger, o2 = thr
+    if o2:
+        if val <= danger: return "alarm"
+        if val <= warn: return "inhibit"
+        return "healthy"
     else:
-        if value >= det_cfg["danger"]*1.15: return OVER
-        if value >= det_cfg["danger"]: return ALARM
-        if value >= det_cfg["warn"]: return INHIBIT
-        return HEALTHY
+        if val >= danger*1.15: return "over"
+        if val >= danger: return "alarm"
+        if val >= warn: return "inhibit"
+        return "healthy"
 
-def worst_state_for_room(rk:str, ppm:float)->str:
-    worst=HEALTHY
-    for det in ROOMS[rk]["detectors"]:
-        s=state_from_threshold(det, ppm)
-        rank=[HEALTHY, INHIBIT, ALARM, OVER, FAULT]
-        if rank.index(s)>rank.index(worst): worst=s
-    if not ROOMS[rk]["detectors"]: return HEALTHY
-    return worst
+def resolve_room_click(payload: dict):
+    if not isinstance(payload, dict): return None
+    cd = payload.get("customdata")
+    if isinstance(cd, str) and cd in ROOMS_POLY: return cd
+    x, y = payload.get("x"), payload.get("y")
+    try:
+        x = float(x); y = float(y)
+    except (TypeError, ValueError):
+        return None
+    best, bestd = None, float("inf")
+    for rk, poly in ROOMS_POLY.items():
+        cx, cy = _center(poly)
+        d = (cx-x)**2 + (cy-y)**2
+        if d < bestd: bestd, best = d, rk
+    return best
 
-def build_facility_floorplan(status_by_room: dict, wireframe: bool = False):
-    W,H=1200,700
-    fig=go.Figure()
-    fig.update_layout(template="plotly_white",
-                      xaxis=dict(visible=False, range=[0,W]),
-                      yaxis=dict(visible=False, range=[H,0]),
-                      margin=dict(l=0,r=260,t=0,b=0),
-                      height=560, paper_bgcolor="#0f172a", plot_bgcolor="#111827",
-                      dragmode=False, showlegend=False)
-    fig.add_shape(type="rect", x0=30,y0=30,x1=W-30,y1=H-30,
-                  fillcolor="#1f2937", line=dict(color="#374151",width=2), layer="below")
-    for rk,room in ROOMS.items():
-        poly=room["poly"]
+def build_facility_floorplan(status_by_room: dict, wireframe: bool=False):
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_white",
+        xaxis=dict(visible=False, range=[0, W]),
+        yaxis=dict(visible=False, range=[H, 0]),
+        margin=dict(l=0, r=260, t=0, b=0),
+        height=640,
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a",
+        dragmode=False,
+        showlegend=False,
+    )
+    # Background image of the pharma layout
+    fig.add_layout_image(
+        dict(
+            source="assets/floorplan.png",
+            xref="x", yref="y",
+            x=0, y=0,
+            sizex=W, sizey=H,
+            sizing="stretch",
+            opacity=1.0,
+            layer="below",
+        )
+    )
+    # Room overlays (semi-transparent so model shows through)
+    for rk, poly in ROOMS_POLY.items():
         xs=[p[0] for p in poly]+[poly[0][0]]
         ys=[p[1] for p in poly]+[poly[0][1]]
-        fill=STATE_COLORS.get(status_by_room.get(rk, "healthy"), "#10b981")
-        fig.add_trace(go.Scatter(x=xs,y=ys,mode="lines",fill="toself",
-                                 fillcolor=fill if not wireframe else "rgba(0,0,0,0)",
-                                 line=dict(color="#4b5563",width=2),
-                                 hovertemplate=f"{room['title']}<extra></extra>",
-                                 name=rk, customdata=[rk]*len(xs), showlegend=False))
-        cx=sum(p[0] for p in poly)/len(poly); cy=sum(p[1] for p in poly)/len(poly)
-        fig.add_annotation(x=cx, y=cy, text=room["title"],
-                           showarrow=False, font=dict(color="#e5e7eb", size=12))
-    legend=[("Healthy","#10b981"),("Inhibit","#f59e0b"),("Alarm","#ef4444"),
-            ("Fault","#fb923c"),("Activated / Over Range","#e5e7eb")]
-    y=80
-    fig.add_annotation(x=1220, y=50, text="<b>Legend</b>", showarrow=False, font=dict(color="#e5e7eb"))
-    for label,color in legend:
-        fig.add_shape(type="rect", x0=1220, y0=y, x1=1250, y1=y+20, fillcolor=color, line=dict(color="#334155"))
-        fig.add_annotation(x=1260, y=y+10, text=label, showarrow=False, font=dict(color="#e5e7eb",size=12), xanchor="left", yanchor="middle")
-        y+=30
+        status = status_by_room.get(rk,"healthy")
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines", fill="toself",
+            fillcolor=COLORS[status]+"CC",  # add alpha
+            line=dict(color="#111827", width=2),
+            hovertemplate=f"{ROOM_DISPLAY[rk]}<extra></extra>",
+            customdata=[rk]*len(xs),
+            name=rk,
+            showlegend=False,
+        ))
+        cx, cy = _center(poly)
+        fig.add_annotation(x=cx, y=cy, text=f"<b>{ROOM_DISPLAY[rk]}</b>",
+                           showarrow=False, font=dict(color="#e5e7eb", size=13))
+    # Legend to the right
+    legend_items=[("Healthy","#10b981"),("Inhibit","#f59e0b"),("Alarm","#ef4444"),
+                  ("Fault","#fb923c"),("Activated / Over Range","#e5e7eb")]
+    y_cursor=80
+    for label,color in legend_items:
+        fig.add_shape(type="rect", x0=W+20, y0=y_cursor, x1=W+50, y1=y_cursor+20,
+                      fillcolor=color, line=dict(color="#334155"))
+        fig.add_annotation(x=W+60, y=y_cursor+10, text=label, showarrow=False,
+                           font=dict(color="#e5e7eb", size=12), xanchor="left", yanchor="middle")
+        y_cursor += 30
+    if wireframe:
+        fig.add_shape(type="rect", x0=120, y0=120, x1=W-120, y1=H-120, line=dict(color="#64748b", width=1, dash="dot"))
     return fig
 
-# top bar
-col_logo, col_title, col_dev = st.columns([1,3,2])
-with col_logo: st.write("🛡️")
-with col_title: st.markdown("<h2 style='text-align:center;margin:6px 0'>OBW Floorplan — Next‑Gen</h2>", unsafe_allow_html=True)
-with col_dev:
-    st.session_state.free_play = st.toggle("Dev", key="dev_toggle", value=st.session_state.get("free_play", False))
-    st.session_state.wireframe = st.checkbox("Wireframe", key="wireframe_cb", value=st.session_state.get("wireframe", False))
+# ── Top bar
+col_l, col_c, col_r = st.columns([1,3,1])
+with col_l: st.write("🏭")
+with col_c: st.markdown("<h2 style='text-align:center;margin-top:10px;'>Pharma Facility — Floorplan</h2>", unsafe_allow_html=True)
+with col_r:
+    if st.button("Dev", key="dev_btn", use_container_width=True):
+        st.session_state.free_play = not st.session_state.get("free_play", False)
 
-# quick buttons
-qcols = st.columns(len(ROOMS))
-for i,(rk,room) in enumerate(ROOMS.items()):
-    with qcols[i]:
-        if st.button(room["title"], key=f"roombtn_{rk}"):
-            st.session_state.room_key=rk; st.session_state.view="room"
-
-# sidebar sim
-if st.session_state.free_play:
+# ── Dev sidebar
+if st.session_state.get("free_play", False):
     with st.sidebar:
-        st.markdown("### Simulation Center")
-        sim_room = st.selectbox("Room", [k for k in ROOMS.keys() if k!="entry"], key="sim_room")
-        sim_mode = st.selectbox("Mode", ["Spike","Ramp","O₂ drop","CO spike"], key="sim_mode")
-        sim_intensity = st.slider("Intensity", 5, 120, 45, step=5, key="sim_intensity")
-        sim_duration = st.slider("Duration (ticks)", 3, 40, 10, key="sim_duration")
+        st.markdown("### Developer Controls")
+        wire = st.checkbox("Wireframe", key="dbg_wire", value=False)
+        st.markdown("#### Simulation Center")
+        rk = st.selectbox("Room", list(ROOMS_POLY.keys()), key="sim_room")
+        mode = st.selectbox("Mode", ["Spike","Ramp","O₂ drop","CO spike"], key="sim_mode")
+        intensity = st.slider("Intensity", 5, 100, 50, step=5, key="sim_int")
+        duration = st.slider("Duration (ticks)", 3, 30, 10, key="sim_dur")
         if st.button("Run Simulation", key="sim_run", use_container_width=True):
             df = st.session_state.data.copy()
             idx = st.session_state.demo_index
-            if sim_mode=="Spike":
-                mask=(df["room"]==sim_room)&(df.index>=idx)&(df.index<idx+sim_duration)
-                df.loc[mask,"ppm"]=df.loc[mask,"ppm"]+float(sim_intensity)
-            elif sim_mode=="Ramp":
-                for i in range(sim_duration):
-                    mask=(df["room"]==sim_room)&(df.index==idx+i)
-                    df.loc[mask,"ppm"]=df.loc[mask,"ppm"]+float(sim_intensity)*(i+1)/sim_duration
-            elif sim_mode=="O₂ drop":
-                for i in range(sim_duration):
-                    mask=(df["room"]==sim_room)&(df.index==idx+i)
-                    df.loc[mask,"ppm"]=df.loc[mask,"ppm"]-float(sim_intensity)*(i+1)/sim_duration
-            elif sim_mode=="CO spike":
-                for i in range(sim_duration):
-                    mask=(df["room"]==sim_room)&(df.index==idx+i)
-                    df.loc[mask,"ppm"]=df.loc[mask,"ppm"]+float(sim_intensity)*0.4
-            st.session_state.data=df; st.toast(f"Simulated {sim_mode} in {ROOMS[sim_room]['title']}")
+            if mode == "Spike":
+                mask = (df["room"] == rk) & (df.index >= idx) & (df.index < idx + duration)
+                df.loc[mask, "ppm"] = df.loc[mask, "ppm"] + float(intensity)
+            elif mode == "Ramp":
+                for i in range(duration):
+                    m = (df["room"] == rk) & (df.index == idx + i)
+                    df.loc[m, "ppm"] = df.loc[m, "ppm"] + float(intensity)*(i+1)/duration
+            elif mode == "O₂ drop":
+                for i in range(duration):
+                    m = (df["room"] == rk) & (df.index == idx + i)
+                    df.loc[m, "ppm"] = df.loc[m, "ppm"] - float(intensity)*(i+1)/duration
+            elif mode == "CO spike":
+                for i in range(duration):
+                    m = (df["room"] == rk) & (df.index == idx + i)
+                    df.loc[m, "ppm"] = df.loc[m, "ppm"] + float(intensity)*0.4
+            st.session_state.data = df
+            st.toast(f"Simulated {mode} in {ROOM_DISPLAY[rk]}")
 
-def last_ppm(room_key:str):
-    df=st.session_state.data; sub=df[df["room"]==room_key]
-    if sub.empty: return None, None
-    idx=min(len(sub)-1, st.session_state.demo_index)
-    row=sub.iloc[idx]; return float(row["ppm"]), pd.to_datetime(row["timestamp"])
-
-def compute_status_map():
-    m={}
-    for rk in ROOMS.keys():
-        ppm,_=last_ppm(rk)
-        m[rk]=worst_state_for_room(rk, ppm if ppm is not None else None)
-    return m
-
-def render_facility():
-    status_by_room = compute_status_map()
-    fig=build_facility_floorplan(status_by_room, wireframe=st.session_state.wireframe)
-    clicked=plotly_events(fig, click_event=True, hover_event=False, select_event=False,
-                          key="facility_click_floorplan", override_height=560)
-    if clicked:
-        payload=clicked[0]
-        rk = payload.get("customdata")
-        if isinstance(rk, list): rk=rk[0]
-        if rk not in ROOMS:
-            x,y=payload.get("x"), payload.get("y")
+# ── Facility view
+wireframe = st.session_state.get("dbg_wire", False)
+status_by_room = {rk: worst_status_for_room(rk) for rk in ROOMS_POLY.keys()}
+fig = build_facility_floorplan(status_by_room, wireframe=wireframe)
+clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="facility_click_floorplan", override_height=640)
+if clicked:
+    payload = clicked[0] or {}
+    st.session_state.last_event = payload
+    rk = payload.get("customdata") if isinstance(payload.get("customdata"), str) else None
+    if rk is None:
+        x, y = payload.get("x"), payload.get("y")
+        try:
+            x=float(x); y=float(y)
             best=None; bestd=1e18
-            for k,room in ROOMS.items():
-                cx=sum(p[0] for p in room["poly"])/len(room["poly"])
-                cy=sum(p[1] for p in room["poly"])/len(room["poly"])
-                d=(cx-x)**2+(cy-y)**2
+            for k, poly in ROOMS_POLY.items():
+                cx, cy = _center(poly)
+                d=(cx-x)**2 + (cy-y)**2
                 if d<bestd: bestd=d; best=k
             rk=best
-        st.session_state.room_key=rk; st.session_state.view="room"
+        except:
+            rk=None
+    if rk:
+        st.session_state.room_key = rk
+        st.session_state.view = "room"
 
-def render_room():
-    rk=st.session_state.room_key
-    if rk is None or rk not in ROOMS:
-        st.session_state.view="facility"; return
-    room=ROOMS[rk]
-    st.markdown(f"### {room['title']}")
-    c1,c2=st.columns([2,1])
+# ── Room detail + chart
+if st.session_state.view == "room" and st.session_state.room_key:
+    rk = st.session_state.room_key
+    st.markdown(f"### {ROOM_DISPLAY[rk]}")
+    df = st.session_state.data[st.session_state.data['room']==rk].iloc[: st.session_state.demo_index + 1].copy()
+    c1,c2 = st.columns([3,2])
     with c1:
-        df=st.session_state.data[st.session_state.data['room']==rk].iloc[:st.session_state.demo_index+1]
         if df.empty:
-            st.info("No data for this room yet.")
+            st.warning("No data for this room.")
         else:
-            roll=df["ppm"].rolling(12,min_periods=3).mean()
-            fig=go.Figure()
-            fig.add_trace(go.Scatter(x=df["timestamp"],y=df["ppm"],mode="lines+markers",name="Live"))
-            fig.add_trace(go.Scatter(x=df["timestamp"],y=roll,mode="lines",name="Rolling mean", line=dict(dash="dot")))
-            if room["detectors"]:
-                det=room["detectors"][0]; warn, danger = det["warn"], det["danger"]
-                if det.get("oxygen_mode"):
-                    fig.add_hrect(y0=-1e6,y1=danger, fillcolor=STATE_COLORS[ALARM], opacity=0.1, line_width=0)
-                    fig.add_hrect(y0=danger,y1=warn, fillcolor=STATE_COLORS[INHIBIT], opacity=0.08, line_width=0)
-                else:
-                    fig.add_hrect(y0=danger,y1=1e6, fillcolor=STATE_COLORS[ALARM], opacity=0.1, line_width=0)
-                    fig.add_hrect(y0=warn,y1=danger, fillcolor=STATE_COLORS[INHIBIT], opacity=0.08, line_width=0)
-            fig.update_layout(template="plotly_dark", height=380, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
-            st.plotly_chart(fig, use_container_width=True, key=f"room_timeseries_{rk}")
+            df['roll_mean'] = df['ppm'].rolling(12, min_periods=3).mean()
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['ppm'], mode='lines+markers', name='Live', line=dict(width=3)))
+            if 'roll_mean' in df.columns:
+                fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['roll_mean'], mode='lines', name='Rolling mean', line=dict(dash='dot')))
+            # thresholds
+            thrmap = {
+                "reactor": (35,45,False),
+                "granulation": (30,40,False),
+                "cleanroom": (18,17,True),
+                "packaging": (35,45,False),
+                "warehouse": (35,50,False),
+                "utilities": (45,55,False),
+                "entry": (40,50,False),
+                "gowning": (40,50,False),
+                "qc": (30,40,False),
+            }
+            warn, danger, o2 = thrmap[rk]
+            if o2:
+                fig2.add_hrect(y0=-1e6, y1=danger, fillcolor=COLORS['alarm'], opacity=0.10, line_width=0)
+                fig2.add_hrect(y0=danger, y1=warn, fillcolor=COLORS['inhibit'], opacity=0.08, line_width=0)
+            else:
+                fig2.add_hrect(y0=danger, y1=1e6, fillcolor=COLORS['alarm'], opacity=0.10, line_width=0)
+                fig2.add_hrect(y0=warn, y1=danger, fillcolor=COLORS['inhibit'], opacity=0.08, line_width=0)
+            fig2.update_layout(template='plotly_dark', height=420, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation='h'))
+            st.plotly_chart(fig2, use_container_width=True, key=f"room_timeseries_{rk}")
     with c2:
-        ppm,_=last_ppm(rk)
-        st.metric("Live Reading", f"{ppm:.1f} ppm" if ppm is not None else "—")
-        status = compute_status_map().get(rk, HEALTHY)
-        st.metric("Status", status.upper())
-        if st.button("⬅️ Back to Facility", key=f"btn_back_{rk}", use_container_width=True):
-            st.session_state.view="facility"
+        # simple AI metrics
+        if not df.empty:
+            last_val = float(df['ppm'].iloc[-1])
+            slope = float(np.polyfit(np.arange(min(10,len(df))), df['ppm'].tail(10), 1)[0]) if len(df)>=2 else 0.0
+            st.metric("Live Reading", f"{last_val:.1f}")
+            st.metric("Slope", f"{slope:.2f} Δ/tick")
+            st.caption(f"Status: {status_by_room[rk].upper()}")
+    if st.button("⬅️ Back to Facility", key="back_fac"):
+        st.session_state.view = "facility"
 
-if st.button("▶ Next", key="tick_next"): st.session_state.demo_index = min(st.session_state.demo_index+1, len(st.session_state.data)-1)
-if st.button("⏭ Reset", key="tick_reset"): st.session_state.demo_index = 0
+# ── Demo tick
+def demo_tick():
+    if st.session_state.demo_index < len(st.session_state.data)-1:
+        st.session_state.demo_index += 1
+demo_tick()
 
-if st.session_state.view=="facility": render_facility()
-else: render_room()
+with st.expander("Debug"):
+    st.write({"view": st.session_state.view, "room_key": st.session_state.room_key, "demo_index": st.session_state.demo_index})
+    st.json(st.session_state.last_event or {})
