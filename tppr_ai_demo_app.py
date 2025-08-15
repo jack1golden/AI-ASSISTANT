@@ -6,273 +6,323 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from streamlit_plotly_events import plotly_events
 
-st.set_page_config(page_title="OBW AI Safety Assistant — Floorplan", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="OBW AI Safety Assistant — Floorplan", layout="wide", page_icon="🧪")
 
-SAFE, WARN, DANGER = "healthy", "inhibit", "alarm"
-COLORS = {"healthy":"#10b981","inhibit":"#f59e0b","alarm":"#ef4444","fault":"#fb923c","over":"#e5e7eb"}
-
-W, H = 1400, 840  # must match the background image
-ROOMS_POLY = {
-    "entry":        [(140,620),(360,620),(360,780),(140,780)],
-    "gowning":      [(380,620),(620,620),(620,780),(380,780)],
-    "reactor":      [(140,140),(420,140),(420,360),(140,360)],
-    "cleanroom":    [(440,140),(760,140),(760,360),(440,360)],
-    "granulation":  [(780,140),(1100,140),(1100,360),(780,360)],
-    "packaging":    [(440,380),(760,380),(760,600),(440,600)],
-    "warehouse":    [(780,380),(1100,380),(1100,600),(780,600)],
-    "utilities":    [(1120,380),(1260,380),(1260,600),(1120,600)],
-    "qc":           [(1120,140),(1260,140),(1260,360),(1120,360)],
-}
+# ──────────────────────────────────────────────────────────────────────────────
+# Display maps & legend
+# ──────────────────────────────────────────────────────────────────────────────
 ROOM_DISPLAY = {
-    "entry":"Entry / Security",
-    "gowning":"Gowning",
-    "reactor":"Reactor Suite",
-    "cleanroom":"Cleanroom (Grade C)",
-    "granulation":"Granulation",
-    "packaging":"Packaging Hall",
-    "warehouse":"Warehouse (API)",
-    "utilities":"Utilities / Boilers",
-    "qc":"QC Lab",
+    "entry": "Entry",
+    "room1": "Room 1",
+    "room2": "Room 2",
+    "room3": "Room 3",
+    "room12": "Room 12",
+    "prod1": "Production 1",
+    "prod2": "Production 2",
 }
 
-# ── State
-if "data" not in st.session_state:
-    st.session_state.data = pd.read_csv("demo_data.csv", parse_dates=["timestamp"])
-if "view" not in st.session_state:
-    st.session_state.view = "facility"
-if "room_key" not in st.session_state:
-    st.session_state.room_key = None
-if "demo_index" not in st.session_state:
-    st.session_state.demo_index = 0
-if "free_play" not in st.session_state:
-    st.session_state.free_play = False
-if "last_event" not in st.session_state:
-    st.session_state.last_event = None
+COLOR = {
+    "healthy": "#10b981",   # green
+    "inhibit": "#f59e0b",   # amber
+    "alarm":   "#ef4444",   # red
+    "fault":   "#fb923c",   # orange
+    "over":    "#e5e7eb",   # light/white
+}
 
-# ── Helpers
-def _center(poly):
-    xs=[p[0] for p in poly]; ys=[p[1] for p in poly]
-    return sum(xs)/len(xs), sum(ys)/len(ys)
+# ──────────────────────────────────────────────────────────────────────────────
+# Geometry (overlay polygons aligned to background image)
+# ──────────────────────────────────────────────────────────────────────────────
+# These match the placeholder image shipped in assets/floorplan.png (1400x800, right legend gutter)
+ROOMS_POLY = {
+    "entry":  [(80, 600), (300, 600), (300, 740), (80, 740)],
+    "prod1":  [(340, 80), (520, 80), (520, 260), (340, 260)],
+    "room12": [(540, 80), (820, 80), (820, 260), (540, 260)],
+    "room1":  [(860, 80), (1120, 80), (1120, 260), (860, 260)],
+    "prod2":  [(340, 280), (520, 280), (520, 460), (340, 460)],
+    "room3":  [(540, 280), (820, 280), (820, 460), (540, 460)],
+    "room2":  [(860, 280), (1120, 280), (1120, 460), (860, 460)],
+}
 
-def worst_status_for_room(rk: str) -> str:
+# ──────────────────────────────────────────────────────────────────────────────
+# Session state & data
+# ──────────────────────────────────────────────────────────────────────────────
+def _init_state():
+    if "data" not in st.session_state:
+        st.session_state.data = pd.read_csv("demo_data.csv", parse_dates=["timestamp"])
+    for k, v in {
+        "view": "facility",
+        "room_key": None,
+        "detector_key": None,
+        "demo_index": 0,
+        "free_play": False,
+        "wireframe": False,
+        "last_event": None,
+        "show_route": False,
+    }.items():
+        st.session_state.setdefault(k, v)
+
+_init_state()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Safe click resolver for 2D floorplan
+# ──────────────────────────────────────────────────────────────────────────────
+def _room_centers_from_polys(rooms_poly: dict) -> dict:
+    centers = {}
+    for rk, poly in rooms_poly.items():
+        xs = [float(p[0]) for p in poly]
+        ys = [float(p[1]) for p in poly]
+        centers[rk] = (sum(xs) / len(xs), sum(ys) / len(ys))
+    return centers
+
+def _safe_float(v):
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+def resolve_room_click(payload: dict, rooms_poly: dict) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    cd = payload.get("customdata")
+    if isinstance(cd, str) and cd in rooms_poly:
+        return cd
+    x = _safe_float(payload.get("x"))
+    y = _safe_float(payload.get("y"))
+    if x is None or y is None:
+        return None
+    centers = _room_centers_from_polys(rooms_poly)
+    best, bestd = None, float("inf")
+    for rk, (cx, cy) in centers.items():
+        d = (cx - x) ** 2 + (cy - y) ** 2
+        if d < bestd:
+            bestd, best = d, rk
+    return best
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Status from data
+# ──────────────────────────────────────────────────────────────────────────────
+THRESH = {
+    "prod1":  {"warn": 35.0, "danger": 45.0, "oxygen_mode": False},
+    "prod2":  {"warn": 35.0, "danger": 45.0, "oxygen_mode": False},
+    "room1":  {"warn": 30.0, "danger": 40.0, "oxygen_mode": False},
+    "room2":  {"warn": 30.0, "danger": 40.0, "oxygen_mode": False},
+    "room3":  {"warn": 30.0, "danger": 40.0, "oxygen_mode": False},
+    "room12": {"warn": 30.0, "danger": 40.0, "oxygen_mode": False},
+    "entry":  {"warn": 30.0, "danger": 40.0, "oxygen_mode": False},
+}
+
+def room_status(rk: str, idx: int) -> str:
     df = st.session_state.data
     sub = df[df["room"] == rk]
     if sub.empty:
         return "fault"
-    idx = min(len(sub)-1, st.session_state.demo_index)
-    val = float(sub.iloc[idx]["ppm"])
-    # thresholds (demo)
-    thr = {
-        "reactor": (35, 45, False),
-        "granulation": (30, 40, False),
-        "cleanroom": (18, 17, True),  # oxygen mode (downwards)
-        "packaging": (35, 45, False),
-        "warehouse": (35, 50, False),
-        "utilities": (45, 55, False),
-        "entry": (40, 50, False),
-        "gowning": (40, 50, False),
-        "qc": (30, 40, False),
-    }[rk]
-    warn, danger, o2 = thr
-    if o2:
+    local_idx = min(len(sub) - 1, idx)
+    val = float(sub.iloc[local_idx]["ppm"])
+    thr = THRESH.get(rk, {"warn": 30.0, "danger": 40.0, "oxygen_mode": False})
+    warn, danger, is_o2 = thr["warn"], thr["danger"], thr["oxygen_mode"]
+    if is_o2:
         if val <= danger: return "alarm"
-        if val <= warn: return "inhibit"
+        if val <= warn:   return "inhibit"
         return "healthy"
     else:
-        if val >= danger*1.15: return "over"
-        if val >= danger: return "alarm"
-        if val >= warn: return "inhibit"
+        if val >= danger * 1.15: return "over"
+        if val >= danger:        return "alarm"
+        if val >= warn:          return "inhibit"
         return "healthy"
 
-def resolve_room_click(payload: dict):
-    if not isinstance(payload, dict): return None
-    cd = payload.get("customdata")
-    if isinstance(cd, str) and cd in ROOMS_POLY: return cd
-    x, y = payload.get("x"), payload.get("y")
-    try:
-        x = float(x); y = float(y)
-    except (TypeError, ValueError):
-        return None
-    best, bestd = None, float("inf")
-    for rk, poly in ROOMS_POLY.items():
-        cx, cy = _center(poly)
-        d = (cx-x)**2 + (cy-y)**2
-        if d < bestd: bestd, best = d, rk
-    return best
+# ──────────────────────────────────────────────────────────────────────────────
+# Simulation
+# ──────────────────────────────────────────────────────────────────────────────
+def apply_simulation(room_key: str, mode: str, intensity: int, duration: int):
+    df = st.session_state.data.copy()
+    # mutate the next 'duration' rows for the selected room starting at demo_index
+    idx = st.session_state.demo_index
+    room_mask = (df["room"] == room_key)
+    target_idxs = df[room_mask].index[df[room_mask].index >= df.index.min() + idx][:duration]
+    for j, row_idx in enumerate(target_idxs):
+        if mode == "Spike":
+            df.loc[row_idx, "ppm"] = float(df.loc[row_idx, "ppm"]) + float(intensity)
+        elif mode == "Ramp":
+            df.loc[row_idx, "ppm"] = float(df.loc[row_idx, "ppm"]) + float(intensity) * (j + 1) / max(1, duration)
+        elif mode == "O₂ drop":
+            df.loc[row_idx, "ppm"] = float(df.loc[row_idx, "ppm"]) - float(intensity) * (j + 1) / max(1, duration)
+        elif mode == "CO spike":
+            df.loc[row_idx, "ppm"] = float(df.loc[row_idx, "ppm"]) + float(intensity) * 0.4
+    st.session_state.data = df
 
-def build_facility_floorplan(status_by_room: dict, wireframe: bool=False):
+# ──────────────────────────────────────────────────────────────────────────────
+# Renderers
+# ──────────────────────────────────────────────────────────────────────────────
+def build_facility_floorplan(status_by_room: dict, wireframe: bool = False):
+    W, H = 1200, 700
     fig = go.Figure()
     fig.update_layout(
         template="plotly_white",
         xaxis=dict(visible=False, range=[0, W]),
         yaxis=dict(visible=False, range=[H, 0]),
-        margin=dict(l=0, r=260, t=0, b=0),
-        height=640,
+        margin=dict(l=0, r=260, t=0, b=0),   # space at right for legend
+        height=560,
         paper_bgcolor="#0f172a",
-        plot_bgcolor="#0f172a",
+        plot_bgcolor="#111827",
         dragmode=False,
         showlegend=False,
-    )
-    # Background image of the pharma layout
-    fig.add_layout_image(
-        dict(
+        images=[dict(
             source="assets/floorplan.png",
             xref="x", yref="y",
-            x=0, y=0,
-            sizex=W, sizey=H,
-            sizing="stretch",
-            opacity=1.0,
-            layer="below",
-        )
+            x=0, y=0, sizex=W, sizey=H,
+            sizing="stretch", opacity=1.0, layer="below"
+        )],
     )
-    # Room overlays (semi-transparent so model shows through)
+
+    # Draw room polygons
     for rk, poly in ROOMS_POLY.items():
-        xs=[p[0] for p in poly]+[poly[0][0]]
-        ys=[p[1] for p in poly]+[poly[0][1]]
-        status = status_by_room.get(rk,"healthy")
+        status = status_by_room.get(rk, "healthy")
+        fill = COLOR.get(status, "#10b981")
+        xs = [p[0] for p in poly] + [poly[0][0]]
+        ys = [p[1] for p in poly] + [poly[0][1]]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines", fill="toself",
-            fillcolor=COLORS[status]+"CC",  # add alpha
-            line=dict(color="#111827", width=2),
-            hovertemplate=f"{ROOM_DISPLAY[rk]}<extra></extra>",
-            customdata=[rk]*len(xs),
+            fillcolor=fill if not wireframe else "rgba(0,0,0,0)",
+            line=dict(color="#4b5563", width=2),
+            hovertemplate=f"{ROOM_DISPLAY.get(rk, rk)}<extra></extra>",
             name=rk,
+            customdata=[rk] * len(xs),
             showlegend=False,
         ))
-        cx, cy = _center(poly)
-        fig.add_annotation(x=cx, y=cy, text=f"<b>{ROOM_DISPLAY[rk]}</b>",
-                           showarrow=False, font=dict(color="#e5e7eb", size=13))
-    # Legend to the right
-    legend_items=[("Healthy","#10b981"),("Inhibit","#f59e0b"),("Alarm","#ef4444"),
-                  ("Fault","#fb923c"),("Activated / Over Range","#e5e7eb")]
-    y_cursor=80
-    for label,color in legend_items:
-        fig.add_shape(type="rect", x0=W+20, y0=y_cursor, x1=W+50, y1=y_cursor+20,
-                      fillcolor=color, line=dict(color="#334155"))
-        fig.add_annotation(x=W+60, y=y_cursor+10, text=label, showarrow=False,
-                           font=dict(color="#e5e7eb", size=12), xanchor="left", yanchor="middle")
-        y_cursor += 30
+        # Label
+        cx = sum(p[0] for p in poly)/len(poly)
+        cy = sum(p[1] for p in poly)/len(poly)
+        fig.add_annotation(x=cx, y=cy, text=f"<b>{ROOM_DISPLAY.get(rk, rk)}</b>", showarrow=False, font=dict(color="#e5e7eb", size=13))
+
+    # Optional debug frame
     if wireframe:
-        fig.add_shape(type="rect", x0=120, y0=120, x1=W-120, y1=H-120, line=dict(color="#64748b", width=1, dash="dot"))
+        fig.add_shape(type="rect", x0=40, y0=40, x1=W-40, y1=H-40, line=dict(color="#64748b", width=1, dash="dot"), layer="above")
+
+    # Legend outside plotting area (right gutter)
+    legend_items = [("Healthy","#10b981"),("Inhibit","#f59e0b"),("Alarm","#ef4444"),("Fault","#fb923c"),("Activated / Over Range","#e5e7eb")]
+    y_cursor = 80
+    for label, color in legend_items:
+        fig.add_shape(type="rect", x0=W+20, y0=y_cursor, x1=W+50, y1=y_cursor+20, fillcolor=color, line=dict(color="#334155"))
+        fig.add_annotation(x=W+60, y=y_cursor+10, text=label, showarrow=False, font=dict(color="#e5e7eb", size=12), xanchor="left", yanchor="middle")
+        y_cursor += 30
+
     return fig
 
-# ── Top bar
-col_l, col_c, col_r = st.columns([1,3,1])
-with col_l: st.write("🏭")
-with col_c: st.markdown("<h2 style='text-align:center;margin-top:10px;'>Pharma Facility — Floorplan</h2>", unsafe_allow_html=True)
-with col_r:
-    if st.button("Dev", key="dev_btn", use_container_width=True):
-        st.session_state.free_play = not st.session_state.get("free_play", False)
+def render_facility():
+    st.markdown("#### Facility Overview")
+    # Status dict from live data
+    status_by_room = {rk: room_status(rk, st.session_state.demo_index) for rk in ROOMS_POLY.keys()}
 
-# ── Dev sidebar
-if st.session_state.get("free_play", False):
-    with st.sidebar:
-        st.markdown("### Developer Controls")
-        wire = st.checkbox("Wireframe", key="dbg_wire", value=False)
-        st.markdown("#### Simulation Center")
-        rk = st.selectbox("Room", list(ROOMS_POLY.keys()), key="sim_room")
-        mode = st.selectbox("Mode", ["Spike","Ramp","O₂ drop","CO spike"], key="sim_mode")
-        intensity = st.slider("Intensity", 5, 100, 50, step=5, key="sim_int")
-        duration = st.slider("Duration (ticks)", 3, 30, 10, key="sim_dur")
-        if st.button("Run Simulation", key="sim_run", use_container_width=True):
-            df = st.session_state.data.copy()
-            idx = st.session_state.demo_index
-            if mode == "Spike":
-                mask = (df["room"] == rk) & (df.index >= idx) & (df.index < idx + duration)
-                df.loc[mask, "ppm"] = df.loc[mask, "ppm"] + float(intensity)
-            elif mode == "Ramp":
-                for i in range(duration):
-                    m = (df["room"] == rk) & (df.index == idx + i)
-                    df.loc[m, "ppm"] = df.loc[m, "ppm"] + float(intensity)*(i+1)/duration
-            elif mode == "O₂ drop":
-                for i in range(duration):
-                    m = (df["room"] == rk) & (df.index == idx + i)
-                    df.loc[m, "ppm"] = df.loc[m, "ppm"] - float(intensity)*(i+1)/duration
-            elif mode == "CO spike":
-                for i in range(duration):
-                    m = (df["room"] == rk) & (df.index == idx + i)
-                    df.loc[m, "ppm"] = df.loc[m, "ppm"] + float(intensity)*0.4
-            st.session_state.data = df
-            st.toast(f"Simulated {mode} in {ROOM_DISPLAY[rk]}")
+    cols = st.columns([3, 1])
+    with cols[0]:
+        fig = build_facility_floorplan(status_by_room, wireframe=st.session_state.get("wireframe", False))
+        clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="facility_click_floorplan", override_height=560)
+        if clicked:
+            payload = clicked[0] or {}
+            st.session_state.last_event = payload
+            rk = resolve_room_click(payload, ROOMS_POLY)
+            if rk:
+                st.session_state.room_key = rk
+                st.session_state.view = "room"
+    with cols[1]:
+        st.markdown("### Quick Rooms")
+        for rk in ROOMS_POLY.keys():
+            if st.button(ROOM_DISPLAY[rk], key=f"roombtn_{rk}"):
+                st.session_state.room_key = rk
+                st.session_state.view = "room"
 
-# ── Facility view
-wireframe = st.session_state.get("dbg_wire", False)
-status_by_room = {rk: worst_status_for_room(rk) for rk in ROOMS_POLY.keys()}
-fig = build_facility_floorplan(status_by_room, wireframe=wireframe)
-clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="facility_click_floorplan", override_height=640)
-if clicked:
-    payload = clicked[0] or {}
-    st.session_state.last_event = payload
-    rk = payload.get("customdata") if isinstance(payload.get("customdata"), str) else None
-    if rk is None:
-        x, y = payload.get("x"), payload.get("y")
-        try:
-            x=float(x); y=float(y)
-            best=None; bestd=1e18
-            for k, poly in ROOMS_POLY.items():
-                cx, cy = _center(poly)
-                d=(cx-x)**2 + (cy-y)**2
-                if d<bestd: bestd=d; best=k
-            rk=best
-        except:
-            rk=None
-    if rk:
-        st.session_state.room_key = rk
-        st.session_state.view = "room"
-
-# ── Room detail + chart
-if st.session_state.view == "room" and st.session_state.room_key:
+def render_room():
     rk = st.session_state.room_key
-    st.markdown(f"### {ROOM_DISPLAY[rk]}")
-    df = st.session_state.data[st.session_state.data['room']==rk].iloc[: st.session_state.demo_index + 1].copy()
-    c1,c2 = st.columns([3,2])
-    with c1:
-        if df.empty:
-            st.warning("No data for this room.")
-        else:
-            df['roll_mean'] = df['ppm'].rolling(12, min_periods=3).mean()
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['ppm'], mode='lines+markers', name='Live', line=dict(width=3)))
-            if 'roll_mean' in df.columns:
-                fig2.add_trace(go.Scatter(x=df['timestamp'], y=df['roll_mean'], mode='lines', name='Rolling mean', line=dict(dash='dot')))
-            # thresholds
-            thrmap = {
-                "reactor": (35,45,False),
-                "granulation": (30,40,False),
-                "cleanroom": (18,17,True),
-                "packaging": (35,45,False),
-                "warehouse": (35,50,False),
-                "utilities": (45,55,False),
-                "entry": (40,50,False),
-                "gowning": (40,50,False),
-                "qc": (30,40,False),
-            }
-            warn, danger, o2 = thrmap[rk]
-            if o2:
-                fig2.add_hrect(y0=-1e6, y1=danger, fillcolor=COLORS['alarm'], opacity=0.10, line_width=0)
-                fig2.add_hrect(y0=danger, y1=warn, fillcolor=COLORS['inhibit'], opacity=0.08, line_width=0)
-            else:
-                fig2.add_hrect(y0=danger, y1=1e6, fillcolor=COLORS['alarm'], opacity=0.10, line_width=0)
-                fig2.add_hrect(y0=warn, y1=danger, fillcolor=COLORS['inhibit'], opacity=0.08, line_width=0)
-            fig2.update_layout(template='plotly_dark', height=420, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation='h'))
-            st.plotly_chart(fig2, use_container_width=True, key=f"room_timeseries_{rk}")
-    with c2:
-        # simple AI metrics
-        if not df.empty:
-            last_val = float(df['ppm'].iloc[-1])
-            slope = float(np.polyfit(np.arange(min(10,len(df))), df['ppm'].tail(10), 1)[0]) if len(df)>=2 else 0.0
-            st.metric("Live Reading", f"{last_val:.1f}")
-            st.metric("Slope", f"{slope:.2f} Δ/tick")
-            st.caption(f"Status: {status_by_room[rk].upper()}")
-    if st.button("⬅️ Back to Facility", key="back_fac"):
+    if rk is None or rk not in ROOMS_POLY:
         st.session_state.view = "facility"
+        return
+    st.markdown(f"### {ROOM_DISPLAY.get(rk, rk)} — Detail")
 
-# ── Demo tick
-def demo_tick():
-    if st.session_state.demo_index < len(st.session_state.data)-1:
-        st.session_state.demo_index += 1
-demo_tick()
+    df = st.session_state.data
+    sub = df[df["room"] == rk].iloc[: st.session_state.demo_index + 1].copy()
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        fig = go.Figure()
+        if not sub.empty:
+            sub["roll"] = sub["ppm"].rolling(12, min_periods=3).mean()
+            fig.add_trace(go.Scatter(x=sub["timestamp"], y=sub["ppm"], mode="lines+markers", name="Live", line=dict(width=3)))
+            fig.add_trace(go.Scatter(x=sub["timestamp"], y=sub["roll"], mode="lines", name="Rolling mean", line=dict(dash="dot")))
+        thr = THRESH.get(rk, {"warn": 30.0, "danger": 40.0, "oxygen_mode": False})
+        warn, danger, is_o2 = thr["warn"], thr["danger"], thr["oxygen_mode"]
+        if is_o2:
+            fig.add_hrect(y0=-1e6, y1=danger, fillcolor=COLOR["alarm"], opacity=0.10, line_width=0)
+            fig.add_hrect(y0=danger, y1=warn, fillcolor=COLOR["inhibit"], opacity=0.08, line_width=0)
+        else:
+            fig.add_hrect(y0=danger, y1=1e6, fillcolor=COLOR["alarm"], opacity=0.10, line_width=0)
+            fig.add_hrect(y0=warn, y1=danger, fillcolor=COLOR["inhibit"], opacity=0.08, line_width=0)
+        fig.update_layout(template="plotly_dark", height=420, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
+        st.plotly_chart(fig, use_container_width=True)
 
-with st.expander("Debug"):
-    st.write({"view": st.session_state.view, "room_key": st.session_state.room_key, "demo_index": st.session_state.demo_index})
-    st.json(st.session_state.last_event or {})
+        b1, b2 = st.columns(2)
+        if b1.button("⬅️ Back to Facility", key=f"back_fac_{rk}"):
+            st.session_state.view = "facility"
+        if b2.button("Evacuation Overlay", key=f"evac_{rk}"):
+            st.session_state.show_route = True
+            st.session_state.view = "facility"
+
+    with c2:
+        # Status card
+        status = room_status(rk, st.session_state.demo_index)
+        st.metric("Status", status.upper())
+        # Live value
+        if not sub.empty:
+            st.metric("Last reading", f"{sub['ppm'].iloc[-1]:.1f} ppm")
+        else:
+            st.metric("Last reading", "—")
+
+        # Wireframe toggle
+        st.toggle("Debug: Wireframe", key="wireframe")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Developer controls (Dev)
+# ──────────────────────────────────────────────────────────────────────────────
+def dev_sidebar():
+    st.markdown("### Developer Controls")
+    st.toggle("Show Evacuation Route (placeholder)", key="show_route")
+    st.markdown("#### Simulation Center")
+    room_choice = st.selectbox("Room ID", list(ROOMS_POLY.keys()), index=0, key="sim_room")
+    mode = st.selectbox("Mode", ["Spike", "Ramp", "O₂ drop", "CO spike"], key="sim_mode")
+    intensity = st.slider("Intensity", 5, 100, 50, step=5, key="sim_intensity")
+    duration = st.slider("Duration (ticks)", 3, 30, 10, key="sim_duration")
+    if st.button("Run Simulation", use_container_width=True, key="sim_run"):
+        apply_simulation(room_choice, mode, intensity, duration)
+        st.toast(f"Simulated {mode} in {ROOM_DISPLAY.get(room_choice, room_choice)}")
+    if st.button("Replay Incident", use_container_width=True, key="sim_replay"):
+        st.session_state.demo_index = 0
+        st.toast("Reset demo index.")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Header bar, dev toggle, tick
+# ──────────────────────────────────────────────────────────────────────────────
+col_logo, col_title, col_gear = st.columns([1, 3, 1])
+with col_logo:
+    st.write("🧪")
+with col_title:
+    st.markdown("<h2 style='text-align:center;margin-top:10px;'>Pharma Floorplan — Interactive</h2>", unsafe_allow_html=True)
+with col_gear:
+    if st.button("⚙️", help="Developer Controls", key="gear_btn", use_container_width=True):
+        st.session_state.free_play = not st.session_state.get("free_play", False)
+    dev_val = st.checkbox("Dev", key="dev_hdr", value=st.session_state.get("free_play", False))
+    if dev_val != st.session_state.get("free_play", False):
+        st.session_state.free_play = dev_val
+
+if st.session_state.free_play:
+    with st.sidebar:
+        dev_sidebar()
+
+# Demo tick (advance stream)
+if st.session_state.demo_index < len(st.session_state.data) - 1:
+    st.session_state.demo_index += 1
+
+# Router
+if st.session_state.view == "facility":
+    render_facility()
+elif st.session_state.view == "room":
+    render_room()
+else:
+    render_facility()
